@@ -1,0 +1,1 @@
+# Sungrow-battery-sizer-minimal

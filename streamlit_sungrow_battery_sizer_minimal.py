@@ -1,20 +1,47 @@
+
 import math
 import streamlit as st
 
 # -----------------------------
-# Constants (Sungrow single-phase scenario)
+# System definitions
 # -----------------------------
-INVERTER_SIZES_KW = [3.6, 4.6, 5.0, 6.0]  # SHRS AC sizes
-MAX_DC_AC_RATIO = 1.5
-MPPT_COUNT = 2
-MAX_STRING_CURRENT_A = 16  # informational; not validated without module currents
+SYSTEMS = {
+    "Single-phase • SHRS": {
+        "inverter_ac_sizes": [3.6, 4.6, 5.0, 6.0],
+        "max_dc_ac_ratio": 1.5,
+        "mppts": 2,
+        "max_strings_total": 2,
+        "max_string_current_a": 16,
+        # Battery: SBS050 5 kWh each, 1–4 units (no parallel SHRS)
+        "battery_type": "SBS050",
+        "battery_options_kwh": [5, 10, 15, 20],  # usable
+        "battery_step_display": "≈ 5 kWh blocks (1–4 units)"
+    },
+    "Three-phase • SHRT": {
+        "inverter_ac_sizes": [5.0, 6.0, 8.0, 10.0],
+        "max_dc_ac_ratio": 1.5,
+        "mppts": 2,
+        "max_strings_total": 3,
+        "max_string_current_a": 13.5,
+        # Battery: SBR096..SBR256 (≈ 9.6 to 25.6 kWh usable, ~3.2 kWh steps)
+        "battery_type": "SBR",
+        "battery_options_kwh": [9.6, 12.8, 16.0, 19.2, 22.4, 25.6],
+        "battery_step_display": "≈ 3.2 kWh steps (9.6–25.6 kWh)"
+    },
+    "Three-phase • SHT": {
+        "inverter_ac_sizes": [10.0, 12.0, 15.0, 20.0],
+        "max_dc_ac_ratio": 1.5,
+        "mppts": 3,
+        "max_strings_total": 5,
+        "max_string_current_a": 16,
+        # Battery: SBH100..SBH400 (10–40 kWh usable, 5 kWh steps; typical stacks)
+        "battery_type": "SBH",
+        "battery_options_kwh": [10, 15, 20, 25, 30, 35, 40],
+        "battery_step_display": "≈ 5 kWh steps (10–40 kWh)"
+    },
+}
 
-# Battery: SBS050 (usable ≈ 5.0 kWh per unit), up to 4 per SHRS, up to 2 SHRS in parallel
-BATTERY_UNIT_KWH = 5.0
-MAX_BATTERIES_PER_SHRS = 4
-MAX_SHRS_PARALLEL = 2
-
-# Assumptions (defaults; can be adjusted in UI)
+# Assumptions (defaults; adjustable)
 DEFAULT_YIELD_PER_KWP_YR = 1050  # kWh/kWp/year baseline for Central Europe / CH
 DEFAULT_DAY_FRACTION = 0.40
 DEFAULT_RTE = 0.92
@@ -58,27 +85,19 @@ def estimate_yearly_pv_yield_kwp(region_yield, orient_factor, tilt_fac):
     return region_yield * orient_factor * tilt_fac
 
 
-def pick_inverter_size(dc_kw: float) -> dict:
+def pick_inverter_size(dc_kw: float, ac_sizes: list, max_ratio: float) -> dict:
     choices = []
-    for ac in INVERTER_SIZES_KW:
+    for ac in ac_sizes:
         ratio = dc_kw / ac if ac > 0 else float("inf")
-        ok = ratio <= MAX_DC_AC_RATIO
+        ok = ratio <= max_ratio
         score = abs(1.25 - ratio)  # aim near ~1.25
         choices.append((ac, ratio, ok, score))
     valid = [c for c in choices if c[2]]
     if valid:
-        best = min(valid, key=lambda x: (x[3], x[0]))
+        best = min(valid, key=lambda x: (x[3], x[0]))  # closest to 1.25; tie -> smaller AC
     else:
-        best = max(choices, key=lambda x: x[0])
+        best = max(choices, key=lambda x: x[0])  # fallback largest AC
     return {"ac_kw": best[0], "dc_ac_ratio": best[1], "within_cap": best[2]}
-
-
-def round_to_battery_steps(usable_kwh_needed: float, shrs_count: int) -> dict:
-    max_units = MAX_BATTERIES_PER_SHRS * shrs_count
-    max_usable = max_units * BATTERY_UNIT_KWH
-    units = min(max_units, max(1, round(usable_kwh_needed / BATTERY_UNIT_KWH))) if usable_kwh_needed > 0 else 0
-    usable = units * BATTERY_UNIT_KWH
-    return {"units_total": units, "usable_kwh": usable, "max_usable_kwh": max_usable}
 
 
 def estimate_battery_need_simple(annual_kwh: float,
@@ -115,37 +134,40 @@ def estimate_battery_need_simple(annual_kwh: float,
     }
 
 
+def round_to_available_sizes(usable_kwh_needed: float, options: list) -> float:
+    """Pick the closest available usable size from a list of options; minimum 0 if no need."""
+    if usable_kwh_needed <= 0:
+        return 0.0
+    return min(options, key=lambda s: abs(s - usable_kwh_needed))
+
+
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="Sungrow Battery Sizer (Minimal Inputs)", layout="centered")
+st.set_page_config(page_title="Sungrow Battery Sizer (v2)", layout="centered")
 
-st.title("🔋 Sungrow Battery Sizer — Minimal Inputs")
-st.caption("SHRS (3.6/4.6/5.0/6.0 kW) • SBS050 (5 kWh per unit) • Up to 4 batteries per SHRS • Up to 2 SHRS in parallel")
+st.title("🔋 Sungrow Battery Sizer — v2")
+st.caption("Single‑phase SHRS • Three‑phase SHRT/SHT • Minimal inputs with PV & consumption")
+
+system_key = st.selectbox("System type", list(SYSTEMS.keys()), index=0)
+SYS = SYSTEMS[system_key]
 
 with st.form("inputs"):
     st.subheader("Your PV & Consumption")
     colA, colB = st.columns(2)
-    total_modules = colA.number_input("Total PV modules installed", min_value=1, max_value=200, value=16, step=1)
+    total_modules = colA.number_input("Total PV modules installed", min_value=1, max_value=300, value=16, step=1)
     module_wp = colB.number_input("Module wattage (Wp)", min_value=250, max_value=700, value=430, step=5)
 
     col1, col2 = st.columns(2)
-    strings = col1.selectbox("Number of strings (MPPTs used)", options=[1, 2], index=1)
-    annual_kwh = col2.number_input("Annual electricity consumption (kWh)", min_value=500, max_value=30000, value=5000, step=100)
+    strings = col1.number_input(f"Number of strings (max {SYS['max_strings_total']})",
+                                min_value=1, max_value=SYS['max_strings_total'],
+                                value=min(2, SYS['max_strings_total']), step=1)
+    annual_kwh = col2.number_input("Annual electricity consumption (kWh)", min_value=500, max_value=50000, value=5000, step=100)
 
-    st.markdown("**Array orientation & tilt** (use the dominant orientation; per-string detail is optional)")
+    st.markdown("**Array orientation & tilt** (use the dominant orientation)")
     col3, col4 = st.columns(2)
     orientation = col3.selectbox("Orientation", options=["south", "southeast", "southwest", "east", "west", "east-west", "north"], index=0)
     tilt = col4.number_input("Tilt (degrees)", min_value=0, max_value=90, value=30, step=1)
-
-    # Optional: per-string module split (only visible if 2 strings)
-    per_string_counts = [total_modules, 0]
-    if strings == 2:
-        st.markdown("Optional: **Modules per string** (for 2 strings). Leave equal split if unsure.")
-        s1 = st.number_input("String 1: modules", min_value=1, max_value=int(total_modules)-1, value=int(math.ceil(total_modules/2)), step=1)
-        s2 = total_modules - s1
-        st.write(f"String 2: modules = {s2}")
-        per_string_counts = [s1, s2]
 
     # Advanced (optional)
     with st.expander("Advanced assumptions"):
@@ -154,69 +176,67 @@ with st.form("inputs"):
         rte = st.slider("Round-trip efficiency", min_value=0.80, max_value=0.98, value=DEFAULT_RTE, step=0.01)
         dod = st.slider("Usable depth of discharge", min_value=0.80, max_value=0.98, value=DEFAULT_DOD, step=0.01)
         degradation = st.slider("Degradation reserve", min_value=0.05, max_value=0.20, value=DEFAULT_DEGRADATION_RESERVE, step=0.01)
-        two_shrs = st.checkbox("Two SHRS in parallel (doubles max battery units)", value=False)
 
     submitted = st.form_submit_button("Calculate recommendation")
 
 if submitted:
-    # Compute DC size
+    # Compute PV DC
     dc_kw = (total_modules * module_wp) / 1000.0
 
-    # Orientation/tilt factors and specific yield
+    # Yield factors
     ofac = orientation_factor(orientation)
     tfac = tilt_factor(tilt)
     specific_yield = estimate_yearly_pv_yield_kwp(region_yield, ofac, tfac)
-
-    # Estimated yearly PV
     yearly_pv_kwh = dc_kw * specific_yield
 
-    # Inverter pick
-    inv_choice = pick_inverter_size(dc_kw)
+    # Inverter pick per system
+    inv_choice = pick_inverter_size(dc_kw, SYS["inverter_ac_sizes"], SYS["max_dc_ac_ratio"])
 
-    # Battery need (minimal self-consumption approach)
+    # Battery need
     sc = estimate_battery_need_simple(annual_kwh, dc_kw, specific_yield, day_fraction, rte, dod, degradation)
+    battery_rec_kwh = round_to_available_sizes(sc["usable_needed"], SYS["battery_options_kwh"])
 
-    # Round to SBS050 steps
-    shrs_count = 2 if two_shrs else 1
-    rounding = round_to_battery_steps(sc["usable_needed"], shrs_count)
-
-    # -----------------------------
-    # Results
-    # -----------------------------
+    # UI results
     st.subheader("Recommendation")
     colr1, colr2 = st.columns(2)
     with colr1:
         st.metric("Estimated PV DC size", f"{dc_kw:.2f} kW")
-        st.metric("Suggested SHRS AC size", f'{inv_choice["ac_kw"]:.1f} kW', help=f'DC/AC ratio ≈ {inv_choice["dc_ac_ratio"]:.2f} (cap ≤ {MAX_DC_AC_RATIO})')
+        st.metric("Suggested inverter (AC)", f'{inv_choice["ac_kw"]:.1f} kW', help=f'DC/AC ratio ≈ {inv_choice["dc_ac_ratio"]:.2f} (cap ≤ {SYS["max_dc_ac_ratio"]})')
         if not inv_choice["within_cap"]:
-            st.warning("Your DC/AC ratio exceeds the 1.5 cap. Consider a larger SHRS or reducing PV DC.")
+            st.warning(f"Your DC/AC ratio exceeds the {SYS['max_dc_ac_ratio']} cap. Consider a larger inverter or less PV DC.")
     with colr2:
         st.metric("Specific yield (adj.)", f"{specific_yield:.0f} kWh/kWp/yr")
         st.metric("PV production (est. yearly)", f"{yearly_pv_kwh:.0f} kWh")
 
     st.markdown("---")
-    st.subheader("Battery sizing (SBS050)")
-    st.write(f"- Typical daily load: **{sc['daily_load']:.1f} kWh** (from {annual_kwh} kWh/yr)")
+    st.subheader(f"Battery sizing ({SYS['battery_type']})")
+    st.write(f"- Typical daily load: **{sc['daily_load']:.1f} kWh**")
     st.write(f"- Typical daily PV: **{sc['daily_pv']:.1f} kWh** (from {dc_kw:.2f} kW @ {specific_yield:.0f} kWh/kWp/yr)")
     st.write(f"- Daytime load (assumed {day_fraction*100:.0f}%): **{sc['day_load']:.1f} kWh**; Night load: **{sc['night_load']:.1f} kWh**")
     st.write(f"- Daytime PV surplus: **{sc['surplus_day']:.1f} kWh**; Shiftable to night: **{sc['shiftable']:.1f} kWh**")
 
-    if sc["usable_needed"] <= 0.1:
-        st.info("Based on your inputs, there may be little to no surplus to shift on typical days. A battery may offer limited benefit for pure self-consumption.")
+    if battery_rec_kwh == 0:
+        st.info("Your typical shiftable energy is very small. A battery may have limited benefit for pure self-consumption.")
     else:
-        if rounding["units_total"] == 0:
-            st.info("Suggested usable storage is very small; rounding results in 0 SBS050 units. Consider at least one unit (5 kWh) if you want backup or future loads.")
-        else:
-            st.write(f"**Usable storage target** (per typical day): **{sc['usable_needed']:.1f} kWh**")
-            st.write(f"Rounded to SBS050 steps (≈ {BATTERY_UNIT_KWH:.1f} kWh each): **{rounding['units_total']} unit(s)** → **{rounding['usable_kwh']:.1f} kWh usable**")
-            st.write(f"Max usable capacity allowed by your setup: **{rounding['max_usable_kwh']:.0f} kWh**" + (" (two SHRS)" if two_shrs else " (one SHRS)"))
+        st.write(f"**Usable storage target**: ~**{sc['usable_needed']:.1f} kWh** → Recommended **{battery_rec_kwh:.1f} kWh** ({SYS['battery_step_display']}).")
+        # Model name helper
+        if SYS["battery_type"] == "SBR":
+            # Convert 9.6 -> 096 etc (rough label)
+            label = f"SBR{int(round(battery_rec_kwh*10)):03d}"
+            st.write(f"Suggested model capacity label: **{label}**")
+        elif SYS["battery_type"] == "SBH":
+            label = f"SBH{int(round(battery_rec_kwh*10)):03d}"
+            st.write(f"Suggested model capacity label: **{label}**")
+        else:  # SBS050 units
+            units = int(round(battery_rec_kwh / 5))
+            st.write(f"Suggested: **{units}× SBS050** (≈ {battery_rec_kwh:.0f} kWh usable).")
 
     st.markdown("---")
     st.subheader("Sanity checks & notes")
-    st.write("- **Strings vs MPPTs:** You selected **{} string(s)**; SHRS has **{} MPPTs**. This is fine. For two strings, try to keep similar orientations or use separate MPPTs.".format(strings, MPPT_COUNT))
-    st.write(f"- **String current:** Max recommended ≈ {MAX_STRING_CURRENT_A} A per string (needs module Imp/Isc to verify; not checked here).")
-    st.write(f"- **DC/AC ratio cap:** ≤ {MAX_DC_AC_RATIO}. We aim near 1.2–1.4 for clipping vs utilization balance.")
-    st.write("- This tool is a **quick estimate** for self-consumption sizing. Backup power and tariffs are not considered in this minimal version.")
+    st.write(f"- **MPPTs / strings:** {SYS['mppts']} MPPTs and up to **{SYS['max_strings_total']} strings total**.")
+    st.write(f"- **Max string current:** ≈ **{SYS['max_string_current_a']} A** per string (verify with module Imp/Isc).")
+    st.write(f"- **DC/AC cap:** ≤ {SYS['max_dc_ac_ratio']}. Aim near 1.2–1.4 for good utilization.")
+    st.write("- This is a **quick estimate** focused on self-consumption. Tariffs and backup power not included yet.")
 
 else:
-    st.info("Fill the form and click **Calculate recommendation** to see the suggested SHRS size and SBS050 battery configuration.")
+    st.info("Fill the form and click **Calculate recommendation** to see the suggested inverter and battery configuration for your selected system.")

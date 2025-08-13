@@ -200,22 +200,24 @@ if submitted:
         st.info(T("small_benefit"))
 
     # Notes
-st.markdown("---")
-st.subheader(T("constraints_title"))
+if submitted:
+    st.markdown("---")
+    st.subheader(T("constraints_title"))
 
-# System constraints (unchanged)
-st.write(T("mppt_strings").format(mppts=SYS['mppts'], strings=SYS['max_strings_total']))
-st.write(T("string_current").format(current=SYS['max_string_current_a']))
-st.write(T("dcac_cap").format(cap=SYS['max_dc_ac_ratio']))
+    # System constraints
+    st.write(T("mppt_strings").format(mppts=SYS['mppts'], strings=SYS['max_strings_total']))
+    st.write(T("string_current").format(current=SYS['max_string_current_a']))
+    st.write(T("dcac_cap").format(cap=SYS['max_dc_ac_ratio']))
 
-# Additional assumptions (new bullets)
-st.write(T("assumption_self_consumption"))
-st.write(T("assumption_single_orientation"))
-st.write(T("assumption_average_yield"))
-st.write(T("assumption_profile_simplified"))
-st.write(T("assumption_no_tariffs"))
-st.write(T("assumption_no_string_limits"))
-st.write(T("assumption_fixed_efficiencies"))
-st.write(T("assumption_backup_additive"))
+    # Additional assumptions
+    st.write(T("assumption_self_consumption"))
+    st.write(T("assumption_single_orientation"))
+    st.write(T("assumption_average_yield"))
+    st.write(T("assumption_profile_simplified"))
+    st.write(T("assumption_no_tariffs"))
+    st.write(T("assumption_no_string_limits"))
+    st.write(T("assumption_fixed_efficiencies"))
+    st.write(T("assumption_backup_additive"))
+
 else:
     st.info(T("landing_hint"))

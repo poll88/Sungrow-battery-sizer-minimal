@@ -7,36 +7,39 @@ import streamlit as st
 # -----------------------------
 SYSTEMS = {
     "Single-phase • SHRS": {
+        "models": {3.6: "SH3.6RS", 4.6: "SH4.6RS", 5.0: "SH5.0RS", 6.0: "SH6.0RS"},
         "inverter_ac_sizes": [3.6, 4.6, 5.0, 6.0],
         "max_dc_ac_ratio": 1.5,
         "mppts": 2,
         "max_strings_total": 2,
         "max_string_current_a": 16,
-        # Battery: SBS050 5 kWh each, 1–4 units (no parallel SHRS)
         "battery_type": "SBS050",
         "battery_options_kwh": [5, 10, 15, 20],  # usable
+        "battery_labels": ["SBS050 ×1", "SBS050 ×2", "SBS050 ×3", "SBS050 ×4"],
         "battery_step_display": "≈ 5 kWh blocks (1–4 units)"
     },
     "Three-phase • SHRT": {
+        "models": {5.0: "SH5.0RT", 6.0: "SH6.0RT", 8.0: "SH8.0RT", 10.0: "SH10RT"},
         "inverter_ac_sizes": [5.0, 6.0, 8.0, 10.0],
         "max_dc_ac_ratio": 1.5,
         "mppts": 2,
         "max_strings_total": 3,
         "max_string_current_a": 13.5,
-        # Battery: SBR096..SBR256 (≈ 9.6 to 25.6 kWh usable, ~3.2 kWh steps)
         "battery_type": "SBR",
         "battery_options_kwh": [9.6, 12.8, 16.0, 19.2, 22.4, 25.6],
+        "battery_labels": ["SBR096", "SBR128", "SBR160", "SBR192", "SBR224", "SBR256"],
         "battery_step_display": "≈ 3.2 kWh steps (9.6–25.6 kWh)"
     },
     "Three-phase • SHT": {
+        "models": {10.0: "SH10T", 12.0: "SH12T", 15.0: "SH15T", 20.0: "SH20T"},
         "inverter_ac_sizes": [10.0, 12.0, 15.0, 20.0],
         "max_dc_ac_ratio": 1.5,
         "mppts": 3,
         "max_strings_total": 5,
         "max_string_current_a": 16,
-        # Battery: SBH100..SBH400 (10–40 kWh usable, 5 kWh steps; typical stacks)
         "battery_type": "SBH",
         "battery_options_kwh": [10, 15, 20, 25, 30, 35, 40],
+        "battery_labels": ["SBH100", "SBH150", "SBH200", "SBH250", "SBH300", "SBH350", "SBH400"],
         "battery_step_display": "≈ 5 kWh steps (10–40 kWh)"
     },
 }
@@ -64,11 +67,23 @@ def orientation_factor(orientation: str) -> float:
         return 0.90
     if o in ["west", "w"]:
         return 0.90
-    if o in ["east-west", "ew", "e-w", "east_west"]:
-        return 0.95
     if o in ["north", "n"]:
         return 0.60
     return 1.00
+
+
+def opposite_orientation(orientation: str) -> str:
+    pairs = {
+        "south": "north",
+        "southeast": "northwest",
+        "southwest": "northeast",
+        "east": "west",
+        "west": "east",
+        "north": "south",
+        "northeast": "southwest",
+        "northwest": "southeast",
+    }
+    return pairs.get(orientation.lower(), "north")
 
 
 def tilt_factor(tilt_deg: float) -> float:
@@ -85,7 +100,7 @@ def estimate_yearly_pv_yield_kwp(region_yield, orient_factor, tilt_fac):
     return region_yield * orient_factor * tilt_fac
 
 
-def pick_inverter_size(dc_kw: float, ac_sizes: list, max_ratio: float) -> dict:
+def pick_inverter(dc_kw: float, ac_sizes: list, models_map: dict, max_ratio: float) -> dict:
     choices = []
     for ac in ac_sizes:
         ratio = dc_kw / ac if ac > 0 else float("inf")
@@ -94,28 +109,35 @@ def pick_inverter_size(dc_kw: float, ac_sizes: list, max_ratio: float) -> dict:
         choices.append((ac, ratio, ok, score))
     valid = [c for c in choices if c[2]]
     if valid:
-        best = min(valid, key=lambda x: (x[3], x[0]))  # closest to 1.25; tie -> smaller AC
+        best = min(valid, key=lambda x: (x[3], x[0]))
     else:
-        best = max(choices, key=lambda x: x[0])  # fallback largest AC
-    return {"ac_kw": best[0], "dc_ac_ratio": best[1], "within_cap": best[2]}
+        best = max(choices, key=lambda x: x[0])
+    ac_kw = best[0]
+    return {"ac_kw": ac_kw, "model": models_map.get(ac_kw, f"{ac_kw:.1f} kW"), "dc_ac_ratio": best[1], "within_cap": best[2]}
 
 
-def estimate_battery_need_simple(annual_kwh: float,
-                                 pv_kw: float,
-                                 specific_yield_kwh_per_kwp_yr: float,
-                                 day_fraction: float,
-                                 rte: float,
-                                 dod: float,
-                                 degradation_reserve: float) -> dict:
+def estimate_battery_need(annual_kwh: float,
+                          pv_kw: float,
+                          specific_yield_kwh_per_kwp_yr: float,
+                          day_fraction: float,
+                          rte: float,
+                          dod: float,
+                          degradation_reserve: float,
+                          backup_kw: float,
+                          backup_hours: float,
+                          profile_flatten: float = 1.0) -> dict:
     daily_load = annual_kwh / 365.0
     daily_pv = (pv_kw * specific_yield_kwh_per_kwp_yr) / 365.0
 
     day_load = daily_load * day_fraction
     night_load = daily_load - day_load
-    surplus_day = max(0.0, daily_pv - day_load)
+    surplus_day = max(0.0, daily_pv - day_load) * profile_flatten  # flatten profile reduces midday surplus
     shiftable = min(surplus_day, night_load)
 
-    usable_needed = shiftable
+    backup_energy = max(0.0, backup_kw) * max(0.0, backup_hours)
+
+    usable_needed = max(shiftable, backup_energy)
+
     if usable_needed <= 0:
         nominal_needed = 0.0
     else:
@@ -129,25 +151,26 @@ def estimate_battery_need_simple(annual_kwh: float,
         "night_load": night_load,
         "surplus_day": surplus_day,
         "shiftable": shiftable,
+        "backup_energy": backup_energy,
         "usable_needed": usable_needed,
         "nominal_needed": nominal_needed
     }
 
 
-def round_to_available_sizes(usable_kwh_needed: float, options: list) -> float:
-    """Pick the closest available usable size from a list of options; minimum 0 if no need."""
-    if usable_kwh_needed <= 0:
-        return 0.0
-    return min(options, key=lambda s: abs(s - usable_kwh_needed))
+def pick_battery_model(usable_kwh_needed: float, options: list, labels: list) -> tuple:
+    if usable_kwh_needed <= 0 or not options:
+        return 0.0, ""
+    idx = min(range(len(options)), key=lambda i: abs(options[i] - usable_kwh_needed))
+    return options[idx], labels[idx] if idx < len(labels) else f"{options[idx]:.1f} kWh"
 
 
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="Sungrow Battery Sizer (v2)", layout="centered")
+st.set_page_config(page_title="Sungrow Battery Sizer (v3.1)", layout="centered")
 
-st.title("🔋 Sungrow Battery Sizer — v2")
-st.caption("Single‑phase SHRS • Three‑phase SHRT/SHT • Minimal inputs with PV & consumption")
+st.title("🔋 Sungrow Battery Sizer — v3.1")
+st.caption("Choose one or two roof sides (opposite orientations). Single‑phase **SHRS** • Three‑phase **SHRT/SHT**")
 
 system_key = st.selectbox("System type", list(SYSTEMS.keys()), index=0)
 SYS = SYSTEMS[system_key]
@@ -158,16 +181,35 @@ with st.form("inputs"):
     total_modules = colA.number_input("Total PV modules installed", min_value=1, max_value=300, value=16, step=1)
     module_wp = colB.number_input("Module wattage (Wp)", min_value=250, max_value=700, value=430, step=5)
 
-    col1, col2 = st.columns(2)
-    strings = col1.number_input(f"Number of strings (max {SYS['max_strings_total']})",
-                                min_value=1, max_value=SYS['max_strings_total'],
-                                value=min(2, SYS['max_strings_total']), step=1)
-    annual_kwh = col2.number_input("Annual electricity consumption (kWh)", min_value=500, max_value=50000, value=5000, step=100)
+    annual_kwh = st.number_input("Annual electricity consumption (kWh)", min_value=500, max_value=50000, value=5000, step=100)
 
-    st.markdown("**Array orientation & tilt** (use the dominant orientation)")
-    col3, col4 = st.columns(2)
-    orientation = col3.selectbox("Orientation", options=["south", "southeast", "southwest", "east", "west", "east-west", "north"], index=0)
-    tilt = col4.number_input("Tilt (degrees)", min_value=0, max_value=90, value=30, step=1)
+    st.markdown("**Roof layout**")
+    layout_choice = st.radio("Where are the modules placed?", ["All on one side", "Split across two opposite sides"], index=0, horizontal=False)
+
+    if layout_choice == "All on one side":
+        col3, col4 = st.columns(2)
+        orientation_single = col3.selectbox("Orientation", options=["south", "southeast", "southwest", "east", "west", "north"], index=0)
+        tilt = col4.number_input("Tilt (degrees)", min_value=0, max_value=90, value=30, step=1)
+        # Factors
+        orient_fac = orientation_factor(orientation_single)
+        # Profile flatten = 1.0 (sharper midday peak)
+        profile_flatten = 1.0
+        orientation_text = orientation_single
+    else:
+        col3, col4 = st.columns(2)
+        orientation_side_a = col3.selectbox("Main side orientation", options=["east", "west", "south", "southeast", "southwest", "north"], index=0)
+        tilt = col4.number_input("Tilt (degrees)", min_value=0, max_value=90, value=30, step=1)
+        orientation_side_b = opposite_orientation(orientation_side_a)
+        orient_fac = 0.5 * (orientation_factor(orientation_side_a) + orientation_factor(orientation_side_b))
+        # East/West type split flattens production; reduce midday surplus 10%
+        profile_flatten = 0.90
+        orientation_text = f"{orientation_side_a} + {orientation_side_b}"
+
+    # Backup (optional)
+    st.markdown("**Backup (optional)** — size battery to cover self‑consumption *or* backup, whichever is larger.")
+    col5, col6 = st.columns(2)
+    backup_kw = col5.number_input("Critical load power to support during outage (kW)", min_value=0.0, max_value=30.0, value=0.0, step=0.5)
+    backup_hours = col6.number_input("Desired backup duration (hours)", min_value=0.0, max_value=48.0, value=0.0, step=0.5)
 
     # Advanced (optional)
     with st.expander("Advanced assumptions"):
@@ -184,59 +226,58 @@ if submitted:
     dc_kw = (total_modules * module_wp) / 1000.0
 
     # Yield factors
-    ofac = orientation_factor(orientation)
     tfac = tilt_factor(tilt)
-    specific_yield = estimate_yearly_pv_yield_kwp(region_yield, ofac, tfac)
+    specific_yield = estimate_yearly_pv_yield_kwp(region_yield, orient_fac, tfac)
     yearly_pv_kwh = dc_kw * specific_yield
 
     # Inverter pick per system
-    inv_choice = pick_inverter_size(dc_kw, SYS["inverter_ac_sizes"], SYS["max_dc_ac_ratio"])
+    inv_choice = pick_inverter(dc_kw, SYS["inverter_ac_sizes"], SYS["models"], SYS["max_dc_ac_ratio"])
 
-    # Battery need
-    sc = estimate_battery_need_simple(annual_kwh, dc_kw, specific_yield, day_fraction, rte, dod, degradation)
-    battery_rec_kwh = round_to_available_sizes(sc["usable_needed"], SYS["battery_options_kwh"])
+    # Battery need (includes backup option & profile flatten if split)
+    sc = estimate_battery_need(annual_kwh, dc_kw, specific_yield, day_fraction, rte, dod, degradation, backup_kw, backup_hours, profile_flatten=profile_flatten)
+    rec_kwh, rec_label = pick_battery_model(sc["usable_needed"], SYS["battery_options_kwh"], SYS["battery_labels"])
 
-    # UI results
-    st.subheader("Recommendation")
-    colr1, colr2 = st.columns(2)
-    with colr1:
-        st.metric("Estimated PV DC size", f"{dc_kw:.2f} kW")
-        st.metric("Suggested inverter (AC)", f'{inv_choice["ac_kw"]:.1f} kW', help=f'DC/AC ratio ≈ {inv_choice["dc_ac_ratio"]:.2f} (cap ≤ {SYS["max_dc_ac_ratio"]})')
-        if not inv_choice["within_cap"]:
-            st.warning(f"Your DC/AC ratio exceeds the {SYS['max_dc_ac_ratio']} cap. Consider a larger inverter or less PV DC.")
-    with colr2:
-        st.metric("Specific yield (adj.)", f"{specific_yield:.0f} kWh/kWp/yr")
-        st.metric("PV production (est. yearly)", f"{yearly_pv_kwh:.0f} kWh")
+    # -----------------------------
+    # Results
+    # -----------------------------
+    st.subheader("Inverter recommendation")
+    st.metric("Estimated PV DC size", f"{dc_kw:.2f} kW")
+    st.metric("Suggested inverter", inv_choice["model"], help=f'DC/AC ratio ≈ {inv_choice["dc_ac_ratio"]:.2f} (cap ≤ {SYS["max_dc_ac_ratio"]})')
+    if not inv_choice["within_cap"]:
+        st.warning(f"Your DC/AC ratio exceeds the {SYS['max_dc_ac_ratio']} cap. Consider a larger inverter or less PV DC.")
+    if backup_kw > 0 and inv_choice["ac_kw"] < backup_kw:
+        st.warning(f"Backup power needs {backup_kw:.1f} kW, which exceeds the selected inverter's AC rating ({inv_choice['ac_kw']:.1f} kW). Consider the next larger model.")
 
     st.markdown("---")
-    st.subheader(f"Battery sizing ({SYS['battery_type']})")
-    st.write(f"- Typical daily load: **{sc['daily_load']:.1f} kWh**")
-    st.write(f"- Typical daily PV: **{sc['daily_pv']:.1f} kWh** (from {dc_kw:.2f} kW @ {specific_yield:.0f} kWh/kWp/yr)")
+    st.subheader("Battery sizing inputs & rationale")
+    st.write(f"- Orientation: **{orientation_text}**; Tilt: **{tilt}°**")
+    st.write(f"- Typical daily load: **{sc['daily_load']:.1f} kWh**; Typical daily PV: **{sc['daily_pv']:.1f} kWh** (from {dc_kw:.2f} kW @ {specific_yield:.0f} kWh/kWp/yr)")
     st.write(f"- Daytime load (assumed {day_fraction*100:.0f}%): **{sc['day_load']:.1f} kWh**; Night load: **{sc['night_load']:.1f} kWh**")
     st.write(f"- Daytime PV surplus: **{sc['surplus_day']:.1f} kWh**; Shiftable to night: **{sc['shiftable']:.1f} kWh**")
+    if layout_choice == "Split across two opposite sides":
+        st.caption("Two-side layout flattens production; surplus reduced by ~10% to reflect less midday clipping and later peaks.")
+    if backup_kw > 0 and backup_hours > 0:
+        st.write(f"- Backup requirement: **{backup_kw:.1f} kW** for **{backup_hours:.1f} h** → **{sc['backup_energy']:.1f} kWh** energy")
 
-    if battery_rec_kwh == 0:
-        st.info("Your typical shiftable energy is very small. A battery may have limited benefit for pure self-consumption.")
+    if rec_kwh == 0:
+        st.info("Your typical shiftable energy is very small and no backup was requested. A battery may have limited benefit for pure self-consumption.")
     else:
-        st.write(f"**Usable storage target**: ~**{sc['usable_needed']:.1f} kWh** → Recommended **{battery_rec_kwh:.1f} kWh** ({SYS['battery_step_display']}).")
-        # Model name helper
-        if SYS["battery_type"] == "SBR":
-            # Convert 9.6 -> 096 etc (rough label)
-            label = f"SBR{int(round(battery_rec_kwh*10)):03d}"
-            st.write(f"Suggested model capacity label: **{label}**")
-        elif SYS["battery_type"] == "SBH":
-            label = f"SBH{int(round(battery_rec_kwh*10)):03d}"
-            st.write(f"Suggested model capacity label: **{label}**")
-        else:  # SBS050 units
-            units = int(round(battery_rec_kwh / 5))
-            st.write(f"Suggested: **{units}× SBS050** (≈ {battery_rec_kwh:.0f} kWh usable).")
+        st.markdown("---")
+        st.header("✅ Suggested battery model")
+        if SYS["battery_type"] == "SBS050":
+            units = int(round(rec_kwh / 5))
+            st.markdown(f"**SBS050 ×{units}**  &nbsp; _(≈ {rec_kwh:.0f} kWh usable)_")
+        else:
+            st.markdown(f"**{rec_label}**  &nbsp; _(≈ {rec_kwh:.1f} kWh usable)_")
+        st.caption(f"(Rounded to nearest available size for **{SYS['battery_type']}**; {SYS['battery_step_display']})")
 
     st.markdown("---")
     st.subheader("Sanity checks & notes")
-    st.write(f"- **MPPTs / strings:** {SYS['mppts']} MPPTs and up to **{SYS['max_strings_total']} strings total**.")
+    st.write(f"- **MPPTs / strings:** {SYS['mppts']} MPPTs and up to **{SYS['max_strings_total']} strings** (info only).")
     st.write(f"- **Max string current:** ≈ **{SYS['max_string_current_a']} A** per string (verify with module Imp/Isc).")
     st.write(f"- **DC/AC cap:** ≤ {SYS['max_dc_ac_ratio']}. Aim near 1.2–1.4 for good utilization.")
-    st.write("- This is a **quick estimate** focused on self-consumption. Tariffs and backup power not included yet.")
+    st.write("- Quick estimate for self-consumption + backup energy. Tariffs/feed‑in not yet modeled.")
 
 else:
-    st.info("Fill the form and click **Calculate recommendation** to see the suggested inverter and battery configuration for your selected system.")
+    st.info("Choose roof layout (one side or two opposite sides), fill the form, and click **Calculate recommendation** to see the suggested inverter **model** and **battery model**.")
+

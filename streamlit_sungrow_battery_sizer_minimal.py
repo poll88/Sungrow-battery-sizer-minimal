@@ -167,9 +167,9 @@ def pick_battery_model(usable_kwh_needed: float, options: list, labels: list) ->
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="Sungrow Battery Sizer (v3.1)", layout="centered")
+st.set_page_config(page_title="Sungrow Battery Sizer (v3.2)", layout="centered")
 
-st.title("🔋 Sungrow Battery Sizer — v3.1")
+st.title("🔋 Sungrow Battery Sizer — v3.2")
 st.caption("Choose one or two roof sides (opposite orientations). Single‑phase **SHRS** • Three‑phase **SHRT/SHT**")
 
 system_key = st.selectbox("System type", list(SYSTEMS.keys()), index=0)
@@ -240,9 +240,13 @@ if submitted:
     # -----------------------------
     # Results
     # -----------------------------
+    # Inverter section (unchanged)
     st.subheader("Inverter recommendation")
-    st.metric("Estimated PV DC size", f"{dc_kw:.2f} kW")
-    st.metric("Suggested inverter", inv_choice["model"], help=f'DC/AC ratio ≈ {inv_choice["dc_ac_ratio"]:.2f} (cap ≤ {SYS["max_dc_ac_ratio"]})')
+    colr1, colr2 = st.columns(2)
+    with colr1:
+        st.metric("Estimated PV DC size", f"{dc_kw:.2f} kW")
+    with colr2:
+        st.metric("Suggested inverter", inv_choice["model"], help=f'DC/AC ratio ≈ {inv_choice["dc_ac_ratio"]:.2f} (cap ≤ {SYS["max_dc_ac_ratio"]})')
     if not inv_choice["within_cap"]:
         st.warning(f"Your DC/AC ratio exceeds the {SYS['max_dc_ac_ratio']} cap. Consider a larger inverter or less PV DC.")
     if backup_kw > 0 and inv_choice["ac_kw"] < backup_kw:
@@ -259,17 +263,25 @@ if submitted:
     if backup_kw > 0 and backup_hours > 0:
         st.write(f"- Backup requirement: **{backup_kw:.1f} kW** for **{backup_hours:.1f} h** → **{sc['backup_energy']:.1f} kWh** energy")
 
-    if rec_kwh == 0:
-        st.info("Your typical shiftable energy is very small and no backup was requested. A battery may have limited benefit for pure self-consumption.")
-    else:
-        st.markdown("---")
-        st.header("✅ Suggested battery model")
-        if SYS["battery_type"] == "SBS050":
-            units = int(round(rec_kwh / 5))
-            st.markdown(f"**SBS050 ×{units}**  &nbsp; _(≈ {rec_kwh:.0f} kWh usable)_")
+    # Battery section styled like inverter (metrics)
+    st.markdown("---")
+    st.subheader("Battery recommendation")
+    colb1, colb2 = st.columns(2)
+    with colb1:
+        if rec_kwh == 0:
+            st.metric("Usable capacity (rounded)", "—")
         else:
-            st.markdown(f"**{rec_label}**  &nbsp; _(≈ {rec_kwh:.1f} kWh usable)_")
+            st.metric("Usable capacity (rounded)", f"{rec_kwh:.1f} kWh")
+    with colb2:
+        if rec_kwh == 0:
+            st.metric("Suggested battery model", "No battery recommended")
+        else:
+            # For SBS050 we already have labels "SBS050 ×N"
+            st.metric("Suggested battery model", rec_label)
+    if rec_kwh > 0:
         st.caption(f"(Rounded to nearest available size for **{SYS['battery_type']}**; {SYS['battery_step_display']})")
+    else:
+        st.info("Your typical shiftable energy is very small and no backup was requested. A battery may have limited benefit for pure self-consumption.")
 
     st.markdown("---")
     st.subheader("Sanity checks & notes")
@@ -280,4 +292,3 @@ if submitted:
 
 else:
     st.info("Choose roof layout (one side or two opposite sides), fill the form, and click **Calculate recommendation** to see the suggested inverter **model** and **battery model**.")
-

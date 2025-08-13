@@ -406,8 +406,6 @@ SYSTEMS = {
         nominal_needed = usable_needed / (dod * rte)
         nominal_needed *= (1.0 + degradation_reserve)
     return usable_needed, nominal_needed
-
-
 def pick_battery_model(usable_kwh_needed: float, options: list, labels: list) -> tuple:
     if usable_kwh_needed <= 0 or not options:
         return 0.0, ""

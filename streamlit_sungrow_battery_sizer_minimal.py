@@ -1,4 +1,3 @@
-
 import math
 import streamlit as st
 
@@ -15,19 +14,18 @@ BATTERY_UNIT_KWH = 5.0
 MAX_BATTERIES_PER_SHRS = 4
 MAX_SHRS_PARALLEL = 2
 
-# Assumptions (tweakable defaults)
-DEFAULT_YIELD_PER_KWP_YR = 1050  # kWh/kWp/year for Central Europe / CH baseline
-DAY_FRACTION = 0.40              # share of load consumed during daylight hours
-RTE = 0.92                       # round trip efficiency (battery + conversion)
-DOD = 0.90                       # usable depth of discharge fraction
-DEGRADATION_RESERVE = 0.10       # 10% headroom for long-term capacity fade
+# Assumptions (defaults; can be adjusted in UI)
+DEFAULT_YIELD_PER_KWP_YR = 1050  # kWh/kWp/year baseline for Central Europe / CH
+DEFAULT_DAY_FRACTION = 0.40
+DEFAULT_RTE = 0.92
+DEFAULT_DOD = 0.90
+DEFAULT_DEGRADATION_RESERVE = 0.10
 
 
 # -----------------------------
 # Helper functions
 # -----------------------------
 def orientation_factor(orientation: str) -> float:
-    """Crude performance factor by azimuth relative to south. South=1.0 baseline."""
     o = orientation.lower()
     if o in ["south", "s"]:
         return 1.00
@@ -47,7 +45,6 @@ def orientation_factor(orientation: str) -> float:
 
 
 def tilt_factor(tilt_deg: float) -> float:
-    """Simple tilt factor relative to ~30-35° optimum for CH/Central EU."""
     if tilt_deg <= 15:
         return 0.95
     if 16 <= tilt_deg <= 45:
@@ -57,72 +54,54 @@ def tilt_factor(tilt_deg: float) -> float:
     return 0.80  # >60°
 
 
-def estimate_yearly_pv_yield_kwp(region_yield=DEFAULT_YIELD_PER_KWP_YR,
-                                 orient_factor=1.0,
-                                 tilt_fac=1.0):
-    """Adjusted yearly specific yield (kWh/kWp/yr)."""
+def estimate_yearly_pv_yield_kwp(region_yield, orient_factor, tilt_fac):
     return region_yield * orient_factor * tilt_fac
 
 
 def pick_inverter_size(dc_kw: float) -> dict:
-    """
-    Choose SHRS AC size given DC array size, trying to keep DC/AC between ~1.1 and 1.5.
-    Prefer the smallest AC size that does not violate the 1.5 cap.
-    """
     choices = []
     for ac in INVERTER_SIZES_KW:
         ratio = dc_kw / ac if ac > 0 else float("inf")
         ok = ratio <= MAX_DC_AC_RATIO
         score = abs(1.25 - ratio)  # aim near ~1.25
         choices.append((ac, ratio, ok, score))
-    # Filter those under 1.5 cap; if none, take largest AC (still over-capped warning)
     valid = [c for c in choices if c[2]]
     if valid:
-        best = min(valid, key=lambda x: (x[3], x[0]))  # closest to 1.25; tie -> smaller AC
+        best = min(valid, key=lambda x: (x[3], x[0]))
     else:
-        best = max(choices, key=lambda x: x[0])  # largest AC; will flag ratio>1.5
+        best = max(choices, key=lambda x: x[0])
     return {"ac_kw": best[0], "dc_ac_ratio": best[1], "within_cap": best[2]}
 
 
 def round_to_battery_steps(usable_kwh_needed: float, shrs_count: int) -> dict:
-    """
-    Round the usable capacity to SBS050 steps.
-    - Each SBS050 ≈ 5 kWh usable
-    - Up to 4 per SHRS
-    - Up to 2 SHRS in parallel
-    """
     max_units = MAX_BATTERIES_PER_SHRS * shrs_count
     max_usable = max_units * BATTERY_UNIT_KWH
-    units = min(max_units, max(1, round(usable_kwh_needed / BATTERY_UNIT_KWH)))
+    units = min(max_units, max(1, round(usable_kwh_needed / BATTERY_UNIT_KWH))) if usable_kwh_needed > 0 else 0
     usable = units * BATTERY_UNIT_KWH
     return {"units_total": units, "usable_kwh": usable, "max_usable_kwh": max_usable}
 
 
 def estimate_battery_need_simple(annual_kwh: float,
                                  pv_kw: float,
-                                 specific_yield_kwh_per_kwp_yr: float) -> dict:
-    """
-    Minimalist 'self-consumption' storage target:
-    - Estimate daily load and PV
-    - Assume DAY_FRACTION of load occurs while PV is producing
-    - Shiftable = min(daytime surplus, night load)
-    - Size to cover typical daily shiftable energy (add RTE/DOD/degradation headroom)
-    """
+                                 specific_yield_kwh_per_kwp_yr: float,
+                                 day_fraction: float,
+                                 rte: float,
+                                 dod: float,
+                                 degradation_reserve: float) -> dict:
     daily_load = annual_kwh / 365.0
     daily_pv = (pv_kw * specific_yield_kwh_per_kwp_yr) / 365.0
 
-    day_load = daily_load * DAY_FRACTION
+    day_load = daily_load * day_fraction
     night_load = daily_load - day_load
     surplus_day = max(0.0, daily_pv - day_load)
     shiftable = min(surplus_day, night_load)
 
-    # Convert shiftable usable energy into nominal capacity with headrooms
-    usable_needed = shiftable  # target usable energy to shift per typical day
+    usable_needed = shiftable
     if usable_needed <= 0:
         nominal_needed = 0.0
     else:
-        nominal_needed = usable_needed / (DOD * RTE)
-        nominal_needed *= (1.0 + DEGRADATION_RESERVE)
+        nominal_needed = usable_needed / (dod * rte)
+        nominal_needed *= (1.0 + degradation_reserve)
 
     return {
         "daily_load": daily_load,
@@ -171,22 +150,15 @@ with st.form("inputs"):
     # Advanced (optional)
     with st.expander("Advanced assumptions"):
         region_yield = st.number_input("Specific yield baseline (kWh/kWp/year)", min_value=700, max_value=1500, value=DEFAULT_YIELD_PER_KWP_YR, step=10)
-        day_fraction = st.slider("Daytime share of your consumption", min_value=0.2, max_value=0.8, value=DAY_FRACTION, step=0.05)
-        rte = st.slider("Round-trip efficiency", min_value=0.80, max_value=0.98, value=RTE, step=0.01)
-        dod = st.slider("Usable depth of discharge", min_value=0.80, max_value=0.98, value=DOD, step=0.01)
-        degradation = st.slider("Degradation reserve", min_value=0.05, max_value=0.20, value=DEGRADATION_RESERVE, step=0.01)
+        day_fraction = st.slider("Daytime share of your consumption", min_value=0.2, max_value=0.8, value=DEFAULT_DAY_FRACTION, step=0.05)
+        rte = st.slider("Round-trip efficiency", min_value=0.80, max_value=0.98, value=DEFAULT_RTE, step=0.01)
+        dod = st.slider("Usable depth of discharge", min_value=0.80, max_value=0.98, value=DEFAULT_DOD, step=0.01)
+        degradation = st.slider("Degradation reserve", min_value=0.05, max_value=0.20, value=DEFAULT_DEGRADATION_RESERVE, step=0.01)
         two_shrs = st.checkbox("Two SHRS in parallel (doubles max battery units)", value=False)
 
     submitted = st.form_submit_button("Calculate recommendation")
 
 if submitted:
-    # Update globals from advanced
-    global DAY_FRACTION, RTE, DOD, DEGRADATION_RESERVE
-    DAY_FRACTION = day_fraction
-    RTE = rte
-    DOD = dod
-    DEGRADATION_RESERVE = degradation
-
     # Compute DC size
     dc_kw = (total_modules * module_wp) / 1000.0
 
@@ -195,14 +167,14 @@ if submitted:
     tfac = tilt_factor(tilt)
     specific_yield = estimate_yearly_pv_yield_kwp(region_yield, ofac, tfac)
 
-    # Estimated yearly & daily PV
+    # Estimated yearly PV
     yearly_pv_kwh = dc_kw * specific_yield
 
     # Inverter pick
     inv_choice = pick_inverter_size(dc_kw)
 
     # Battery need (minimal self-consumption approach)
-    sc = estimate_battery_need_simple(annual_kwh, dc_kw, specific_yield)
+    sc = estimate_battery_need_simple(annual_kwh, dc_kw, specific_yield, day_fraction, rte, dod, degradation)
 
     # Round to SBS050 steps
     shrs_count = 2 if two_shrs else 1
@@ -226,25 +198,24 @@ if submitted:
     st.subheader("Battery sizing (SBS050)")
     st.write(f"- Typical daily load: **{sc['daily_load']:.1f} kWh** (from {annual_kwh} kWh/yr)")
     st.write(f"- Typical daily PV: **{sc['daily_pv']:.1f} kWh** (from {dc_kw:.2f} kW @ {specific_yield:.0f} kWh/kWp/yr)")
-    st.write(f"- Daytime load (assumed {DAY_FRACTION*100:.0f}%): **{sc['day_load']:.1f} kWh**; Night load: **{sc['night_load']:.1f} kWh**")
+    st.write(f"- Daytime load (assumed {day_fraction*100:.0f}%): **{sc['day_load']:.1f} kWh**; Night load: **{sc['night_load']:.1f} kWh**")
     st.write(f"- Daytime PV surplus: **{sc['surplus_day']:.1f} kWh**; Shiftable to night: **{sc['shiftable']:.1f} kWh**")
 
     if sc["usable_needed"] <= 0.1:
-        st.info("Based on your inputs, there may be little to no surplus to shift at typical days. A battery may offer limited benefit for pure self-consumption.")
+        st.info("Based on your inputs, there may be little to no surplus to shift on typical days. A battery may offer limited benefit for pure self-consumption.")
     else:
-        st.write(f"**Usable storage target** (per typical day): **{sc['usable_needed']:.1f} kWh**")
-        st.write(f"Rounded to SBS050 steps (≈ {BATTERY_UNIT_KWH:.1f} kWh each): **{rounding['units_total']} unit(s)** → **{rounding['usable_kwh']:.1f} kWh usable**")
-        st.write(f"Max usable capacity allowed by your setup: **{rounding['max_usable_kwh']:.0f} kWh**" + (" (two SHRS)" if two_shrs else " (one SHRS)"))
-
-    # Quick heuristic nudge if feed-in is likely low (no tariff inputs here; informational only)
-    if sc["shiftable"] > 0 and sc["usable_needed"] < (2 * BATTERY_UNIT_KWH):
-        st.caption("Tip: If feed-in price is much lower than your purchase tariff, consider going one step larger to capture more surplus on sunny days.")
+        if rounding["units_total"] == 0:
+            st.info("Suggested usable storage is very small; rounding results in 0 SBS050 units. Consider at least one unit (5 kWh) if you want backup or future loads.")
+        else:
+            st.write(f"**Usable storage target** (per typical day): **{sc['usable_needed']:.1f} kWh**")
+            st.write(f"Rounded to SBS050 steps (≈ {BATTERY_UNIT_KWH:.1f} kWh each): **{rounding['units_total']} unit(s)** → **{rounding['usable_kwh']:.1f} kWh usable**")
+            st.write(f"Max usable capacity allowed by your setup: **{rounding['max_usable_kwh']:.0f} kWh**" + (" (two SHRS)" if two_shrs else " (one SHRS)"))
 
     st.markdown("---")
     st.subheader("Sanity checks & notes")
     st.write("- **Strings vs MPPTs:** You selected **{} string(s)**; SHRS has **{} MPPTs**. This is fine. For two strings, try to keep similar orientations or use separate MPPTs.".format(strings, MPPT_COUNT))
     st.write(f"- **String current:** Max recommended ≈ {MAX_STRING_CURRENT_A} A per string (needs module Imp/Isc to verify; not checked here).")
-    st.write(f"- **DC/AC ratio cap:** ≤ {MAX_DC_AC_RATIO}. We aim near 1.2–1.4 for good clipping vs utilization balance.")
+    st.write(f"- **DC/AC ratio cap:** ≤ {MAX_DC_AC_RATIO}. We aim near 1.2–1.4 for clipping vs utilization balance.")
     st.write("- This tool is a **quick estimate** for self-consumption sizing. Backup power and tariffs are not considered in this minimal version.")
 
 else:

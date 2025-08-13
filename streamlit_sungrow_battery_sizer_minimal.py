@@ -394,23 +394,23 @@ SYSTEMS = {
         "max_string_current_a": 13.5,
         "battery_type": "SBR",
         "battery_options_kwh": [9.6, 12.8, 16.0, 19.2, 22.4, 25.6],
-@@ -158,155 +526,172 @@ def apply_system_factors(usable_self_kwh: float,
-                         rte: float,
-                         dod: float,
-                         degradation_reserve: float):
-    """Combine self-consumption + backup (additive), then apply DoD/RTE and degradation reserve."""
-    usable_needed = usable_self_kwh + usable_backup_kwh
-    if usable_needed <= 0:
-        nominal_needed = 0.0
-    else:
-        nominal_needed = usable_needed / (dod * rte)
-        nominal_needed *= (1.0 + degradation_reserve)
-    return usable_needed, nominal_needed
-def pick_battery_model(usable_kwh_needed: float, options: list, labels: list) -> tuple:
-    if usable_kwh_needed <= 0 or not options:
-        return 0.0, ""
-    idx = min(range(len(options)), key=lambda i: abs(options[i] - usable_kwh_needed))
-    return options[idx], labels[idx] if idx < len(labels) else f"{options[idx]:.1f} kWh"
+        "battery_labels": ["SBR096", "SBR128", "SBR160", "SBR192", "SBR224", "SBR256"],
+        "battery_step_display": "≈ 3.2 kWh blocks (9.6–25.6 kWh)"
+    },
+    "Three-phase • SHT": {
+        "models": {10.0: "SH10T", 12.0: "SH12T", 15.0: "SH15T", 20.0: "SH20T"},
+        "inverter_ac_sizes": [10.0, 12.0, 15.0, 20.0],
+        "max_dc_ac_ratio": 1.5,
+        "mppts": 3,
+        "max_strings_total": 5,
+        "max_string_current_a": 16.0,
+        "battery_type": "SBH",
+        "battery_options_kwh": [10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0],
+        "battery_labels": ["SBH100", "SBH150", "SBH200", "SBH250", "SBH300", "SBH350", "SBH400"],
+        "battery_step_display": "≈ 5 kWh blocks (10–40 kWh)"
+    }
+}
+
 
 
 # -----------------------------

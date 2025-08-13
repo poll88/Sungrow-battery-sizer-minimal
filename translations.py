@@ -72,6 +72,15 @@ TRANSLATIONS = {
         "south": "South", "southeast": "South-East", "southwest": "South-West",
         "east": "East", "west": "West", "north": "North",
         "northeast": "North-East", "northwest": "North-West"
+        "constraints_title": "System Constraints & Assumptions",
+        "assumption_self_consumption": "- Focus: **self-consumption** only (store daytime PV and use it in the evening/night).",
+        "assumption_single_orientation": "- PV layout simplified to **one orientation/tilt** (no multi-roof or mixed strings).",
+        "assumption_average_yield": "- PV production uses an **average specific yield** (no monthly/seasonal modeling).",
+        "assumption_profile_simplified": "- Load profile simplified to a **day/night split**; intraday peaks not modeled.",
+        "assumption_no_tariffs": "- **Tariffs, feed-in limits, export credits** and grid constraints are **not** modeled.",
+        "assumption_no_string_limits": "- **String voltage/length limits** and minimum modules per string are not validated here.",
+        "assumption_fixed_efficiencies": "- **Fixed** battery DoD=95% and RTE=90%; inverter/aux losses not explicitly modeled.",
+        "assumption_backup_additive": "- **Backup energy** (kW × h) is added on top of self-consumption and is not cycled daily.",
     },
     # --- German ---
     "de": {

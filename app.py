@@ -35,19 +35,6 @@ def orientation_factor(orientation: str) -> float:
         return 0.60
     return 1.00
 
-def opposite_orientation(orientation: str) -> str:
-    pairs = {
-        "south": "north",
-        "southeast": "northwest",
-        "southwest": "northeast",
-        "east": "west",
-        "west": "east",
-        "north": "south",
-        "northeast": "southwest",
-        "northwest": "southeast",
-    }
-    return pairs.get(orientation.lower(), "north")
-
 def tilt_factor(tilt_deg: float) -> float:
     if tilt_deg <= 15: return 0.95
     if 16 <= tilt_deg <= 45: return 1.00
@@ -70,12 +57,13 @@ def pick_inverter(dc_kw: float, ac_sizes: list, models_map: dict, max_ratio: flo
     return {"ac_kw": ac_kw, "model": models_map.get(ac_kw, f"{ac_kw:.1f} kW"), "dc_ac_ratio": best[1], "within_cap": best[2]}
 
 def estimate_battery_need_components(annual_kwh: float, pv_kw: float, specific_yield_kwh_per_kwp_yr: float,
-                                     day_fraction: float, profile_flatten: float, backup_kw: float, backup_hours: float):
+                                     day_fraction: float, backup_kw: float, backup_hours: float):
     daily_load = annual_kwh / 365.0
     daily_pv = (pv_kw * specific_yield_kwh_per_kwp_yr) / 365.0
     day_load = daily_load * day_fraction
     night_load = daily_load - day_load
-    surplus_day = max(0.0, daily_pv - day_load) * profile_flatten
+    # Single-side assumption -> no curve flattening factor
+    surplus_day = max(0.0, daily_pv - day_load)
     shiftable = min(surplus_day, night_load)
     backup_energy = max(0.0, backup_kw) * max(0.0, backup_hours)
     return {
@@ -122,34 +110,17 @@ with st.form("inputs"):
     module_wp = colB.number_input(T("module_wattage"), min_value=250, max_value=700, value=430, step=5)
     annual_kwh = st.number_input(T("annual_consumption"), min_value=500, max_value=50000, value=5000, step=100)
 
-    st.markdown(f"**{T('roof_layout')}**")
-    layout_opts = ["all_one_side", "split_two_sides"]
-    layout_labels = [T(o) for o in layout_opts]
-    layout_choice_label = st.radio(T("where_modules"), layout_labels, index=0)
-    layout_choice = layout_opts[layout_labels.index(layout_choice_label)]
+    # ---- Single-side only ----
+    col3, col4 = st.columns(2)
+    orient_keys = ["south", "southeast", "southwest", "east", "west", "north"]
+    orient_labels = [T(o) for o in orient_keys]
+    orient_label = col3.selectbox(T("orientation"), options=orient_labels, index=0)
+    orientation_single = orient_keys[orient_labels.index(orient_label)]
+    tilt = col4.number_input("Tilt (degrees)", min_value=0, max_value=90, value=30, step=1)
+    orient_fac = orientation_factor(orientation_single)
+    orientation_text = T(orientation_single)
 
-    if layout_choice == "all_one_side":
-        col3, col4 = st.columns(2)
-        orient_keys = ["south", "southeast", "southwest", "east", "west", "north"]
-        orient_labels = [T(o) for o in orient_keys]
-        orient_label = col3.selectbox(T("orientation"), options=orient_labels, index=0)
-        orientation_single = orient_keys[orient_labels.index(orient_label)]
-        tilt = col4.number_input(T("tilt"), min_value=0, max_value=90, value=30, step=1)
-        orient_fac = orientation_factor(orientation_single)
-        profile_flatten = 1.0
-        orientation_text = T(orientation_single)
-    else:
-        col3, col4 = st.columns(2)
-        orient_keys = ["east", "west", "south", "southeast", "southwest", "north"]
-        orient_labels = [T(o) for o in orient_keys]
-        orient_label_a = col3.selectbox(T("main_side_orientation"), options=orient_labels, index=0)
-        orientation_side_a = orient_keys[orient_labels.index(orient_label_a)]
-        tilt = col4.number_input(T("tilt"), min_value=0, max_value=90, value=30, step=1)
-        orientation_side_b = opposite_orientation(orientation_side_a)
-        orient_fac = 0.5 * (orientation_factor(orientation_side_a) + orientation_factor(orientation_side_b))
-        profile_flatten = 0.90
-        orientation_text = f"{T(orientation_side_a)} + {T(orientation_side_b)}"
-
+    # Load profiles
     st.markdown(f"**{T('daily_load_profile')}**")
     profile_keys = list(LOAD_PROFILES.keys())
     profile_labels = [T(k) for k in profile_keys]
@@ -160,6 +131,7 @@ with st.form("inputs"):
     else:
         day_fraction = LOAD_PROFILES[profile_choice]
 
+    # Backup
     st.markdown(T("backup_optional"))
     col5, col6 = st.columns(2)
     backup_kw = col5.number_input(T("backup_kw"), min_value=0.0, max_value=30.0, value=0.0, step=0.5)
@@ -168,20 +140,25 @@ with st.form("inputs"):
     submitted = st.form_submit_button(T("calculate"))
 
 if submitted:
+    # Fixed assumptions
     region_yield = DEFAULT_YIELD_PER_KWP_YR
     rte = DEFAULT_RTE
     dod = DEFAULT_DOD
 
+    # PV & yield
     dc_kw = (total_modules * module_wp) / 1000.0
     tfac = tilt_factor(tilt)
     specific_yield = estimate_yearly_pv_yield_kwp(region_yield, orient_fac, tfac)
 
+    # Inverter
     inv_choice = pick_inverter(dc_kw, SYS["inverter_ac_sizes"], SYS["models"], SYS["max_dc_ac_ratio"])
 
-    comp = estimate_battery_need_components(annual_kwh, dc_kw, specific_yield, day_fraction, profile_flatten, backup_kw, backup_hours)
+    # Battery components and sizing
+    comp = estimate_battery_need_components(annual_kwh, dc_kw, specific_yield, day_fraction, backup_kw, backup_hours)
     usable_needed, nominal_needed = apply_system_factors(comp["shiftable"], comp["backup_energy"], rte, dod)
     rec_kwh, rec_label = pick_battery_model(usable_needed, SYS["battery_options_kwh"], SYS["battery_labels"])
 
+    # Inverter recommendation
     st.subheader(T("inv_reco"))
     colr1, colr2 = st.columns(2)
     with colr1:
@@ -194,6 +171,7 @@ if submitted:
     if backup_kw > 0 and inv_choice["ac_kw"] < backup_kw:
         st.warning(T("backup_power_warn").format(need=backup_kw, ac=inv_choice['ac_kw']))
 
+    # Battery rationale
     st.markdown("---")
     st.subheader(T("battery_inputs"))
     st.write(T("orientation_tilt_line").format(orientation=orientation_text, tilt=tilt))
@@ -203,11 +181,10 @@ if submitted:
                                          dc_kw=dc_kw, specific_yield=specific_yield))
     st.write(T("day_night_line").format(day_load=comp['day_load'], night_load=comp['night_load']))
     st.write(T("surplus_shift_line").format(surplus=comp['surplus_day'], shiftable=comp['shiftable']))
-    if layout_choice == "split_two_sides":
-        st.caption(T("two_side_caption"))
     if backup_kw > 0 and backup_hours > 0:
         st.write(T("backup_req_line").format(kw=backup_kw, h=backup_hours, energy=comp['backup_energy']))
 
+    # Battery recommendation
     st.markdown("---")
     st.subheader(T("batt_reco"))
     colb1, colb2 = st.columns(2)
@@ -222,6 +199,7 @@ if submitted:
     else:
         st.info(T("small_benefit"))
 
+    # Notes
     st.markdown("---")
     st.subheader(T("sanity"))
     st.write(T("mppt_strings").format(mppts=SYS['mppts'], strings=SYS['max_strings_total']))

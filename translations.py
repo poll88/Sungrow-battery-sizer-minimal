@@ -71,7 +71,7 @@ TRANSLATIONS = {
         "landing_hint": "Fill in your PV system details above to get a recommendation.",
         "south": "South", "southeast": "South-East", "southwest": "South-West",
         "east": "East", "west": "West", "north": "North",
-        "northeast": "North-East", "northwest": "North-West"
+        "northeast": "North-East", "northwest": "North-West",
         "constraints_title": "System Constraints & Assumptions",
         "assumption_self_consumption": "- Focus: **self-consumption** only (store daytime PV and use it in the evening/night).",
         "assumption_single_orientation": "- PV layout simplified to **one orientation/tilt** (no multi-roof or mixed strings).",
@@ -145,7 +145,16 @@ TRANSLATIONS = {
         "landing_hint": "Geben Sie oben Ihre PV-Anlagedaten ein, um eine Empfehlung zu erhalten.",
         "south": "Süd", "southeast": "Südost", "southwest": "Südwest",
         "east": "Ost", "west": "West", "north": "Nord",
-        "northeast": "Nordost", "northwest": "Nordwest"
+        "northeast": "Nordost", "northwest": "Nordwest",
+        "constraints_title": "Systemgrenzen & Annahmen",
+        "assumption_self_consumption": "- Fokus: **Eigenverbrauch** (PV vom Tag wird für Abend/Nacht gespeichert).",
+        "assumption_single_orientation": "- PV-Layout vereinfacht auf **eine Ausrichtung/Neigung** (keine Mischdächer/Strings).",
+        "assumption_average_yield": "- PV-Erzeugung mit **durchschnittlichem spezifischem Ertrag** (keine Saison/Monatsmodelle).",
+        "assumption_profile_simplified": "- Lastprofil als **Tag/Nacht-Aufteilung** vereinfacht; Tages-Spitzen nicht modelliert.",
+        "assumption_no_tariffs": "- **Tarife, Einspeisegrenzen, Vergütungen** und Netzrestriktionen werden **nicht** berücksichtigt.",
+        "assumption_no_string_limits": "- **String-Spannungs-/Längenlimits** und Mindestmodule pro String werden hier nicht geprüft.",
+        "assumption_fixed_efficiencies": "- **Feste** Werte: DoD=95% und RTE=90%; WR/Hilfsverluste nicht explizit modelliert.",
+        "assumption_backup_additive": "- **Backup-Energie** (kW × h) wird zusätzlich zum Eigenverbrauch reserviert, nicht täglich zyklisiert.",
     },
     # --- Italian ---
     "it": {
@@ -210,7 +219,7 @@ TRANSLATIONS = {
         "landing_hint": "Inserisci i dati FV per ottenere raccomandazione.",
         "south": "Sud", "southeast": "Sud-Est", "southwest": "Sud-Ovest",
         "east": "Est", "west": "Ovest", "north": "Nord",
-        "northeast": "Nord-Est", "northwest": "Nord-Ovest"
+        "northeast": "Nord-Est", "northwest": "Nord-Ovest",
     },
     # --- French ---
     "fr": {
